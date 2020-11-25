@@ -11,6 +11,8 @@ class User(db.Model):
     password = db.Column(db.String(80)) 
     register_date = db.Column(db.DateTime, nullable=False, default= datetime.datetime.utcnow())
     is_admin = db.Column(db.Boolean,nullable=False, default=False )
+    trial_image = db.Column(db.String(50))
+    recommend_size = db.Column(db.String(2))
 
     def __repr__(self):
          return f"User('{self.first_name}', '{self.email}', '{self.register_date}')"
@@ -31,7 +33,7 @@ class UserSchema(ma.SQLAlchemyAutoSchema):
         model = User
         include_fk = True
 
-user_schema = UserSchema()
+user_schema = UserSchema(exclude=['password'])
 users_schema = UserSchema(many=True)
 
 # address table schema

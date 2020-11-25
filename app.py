@@ -8,18 +8,32 @@ from functools import wraps
 import jwt
 import json
 import datetime
+import time
 import os
 import uuid
 import base64
 import re
+from PIL import Image
+import numpy as np 
+import cv2
+import matplotlib.pyplot as plt 
+# from parsing import parse
+# from posing import pose
+# from cpvton_wrapper import *
+# from utils_cpvton import *
 
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
+
+# model = Model()
 
 app = Flask(__name__)
 
 app.config['SECRET_KEY'] = 'myntraHackathon'
 CORS(app)
 # database name 
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///Database.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///Database1.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = True
 # creates SQLALCHEMY object 
 db = SQLAlchemy(app) 
@@ -83,12 +97,7 @@ def register():
         if token:
             resp = {
                 'token': token.decode('UTF-8'),
-                'user' : {
-                    'first_name': user1.first_name,
-                    'last_name' : user1.last_name,
-                    'email': user1.email,
-                    'id' : user1.id
-                }
+                'user' : user_schema.dump(user)
             } 
             return jsonify(resp)
         else:
@@ -113,12 +122,7 @@ def login():
                 if token:
                     resp = {
                         'token': token.decode('UTF-8'),
-                        'user' : {
-                            'first_name': user.first_name,
-                            'last_name' : user.last_name,
-                            'email': user.email,
-                            'id' : user.id
-                        }
+                        'user' : user_schema.dump(user)
                     } 
                     return jsonify(resp)
                 else:
@@ -136,13 +140,14 @@ def protected():
 
     user = User.query.get(data['id'])
     if user:
-        resp ={
-            'first_name': user.first_name,
-            'last_name' : user.last_name,
-            'email':user.email,
-            "id":user.id
-        }
-        return jsonify(resp)
+        # resp ={
+        #     'first_name': user.first_name,
+        #     'last_name' : user.last_name,
+        #     'email':user.email,
+        #     "id":user.id
+        # }
+        result = user_schema.dump(user)
+        return jsonify({'user': result})
     else:
         return jsonify({'message':'This is a protected'})
 
@@ -224,7 +229,7 @@ def createNewProduct():
     category = Category.query.filter_by(name= data['category_name']).first()
     if not category:
         return jsonify({'message' : 'Please enter a valid category'})
-    newProduct = Product(product_name=data['product_name'],description=data['description'],brand=data['brand'],discount=data['discount'],regular_price=data['regular_price'],category_id=category.id)
+    newProduct = Product(product_name=data['product_name'],description=data['description'],brand=data['brand'],discount=data['discount'],regular_price=data['regular_price'],category_id=category.id,image=data['image'])
     db.session.add(newProduct)
     db.session.commit()
     if(data['details']):
@@ -325,24 +330,91 @@ def UpdateCart(cart_id):
     db.session.commit()
     return jsonify(cart_schema.dumps(cartProductsToBeDeleted))
 
-@app.route('/tryiton/product/<int:product_id>',methods=['POST'])
+@app.route('/tryiton/product/<int:product_id>',methods=['GET'])
+@token_required
 def tryItOn(product_id):
-    data = request.json
+    user = User.query.get(request.data['id'])
+    # data = request.json
     product = Product.query.get(product_id)
+    
+    image_file='011203'
+    cloth_file= product.image
+    data = load_files('', image_file, cloth_file)
+    output = model.predict(data)
+    cv.imwrite(f'output/result/{image_file}'+'_' + cloth_file +'.jpg', output)
+
+    return jsonify({'trial_image' : 'output/result/'+ image_file+'_'+ cloth_file +'.jpg'})
+            
+
+@app.route('/measuresize',methods=['POST'])
+@token_required
+def measure_size():
+    user = User.query.get(request.data['id'])
+    data = request.json
+
     imgdata = base64.b64decode(re.sub("data:image/jpeg;base64,", '', str(data['image'])))
-    random_id = uuid.uuid4()
-    filename = 'uploads/' + str(random_id) + ".jpg" # I assume you have a way of picking unique filenames
+    # print(imgdata)
+    filename = 'uploads/images/image.jpg'  # I assume you have a way of picking unique filenames
+    
     with open(filename, 'wb') as f:
         f.write(imgdata)
-    
-    return jsonify({'message':'successful'})
 
-@app.route('/upload/<filename>',methods=['GET'])
+    user.trial_image = filename
+    user.recommend_size = 'M'
+    db.session.commit()
+
+    parse()
+    pose()
+
+    return jsonify({'message'  : 'The image has been processed by the jppnet model'})
+    
+@app.route('/jppnetData',methods=['GET'])
+@token_required
+def print_data():
+    user = User.query.get(request.data['id'])
+
+    with open(os.path.join("uploads","pose_data","user_" + str(user.id)+"_pose_data.npy"), 'rb') as f:
+        pose_data = np.load(f)
+
+    with open(os.path.join("uploads","parse","user_" + str(user.id)+"_parse.npy"), 'rb') as f:
+        parse = np.load(f) 
+
+    with open(os.path.join("uploads","image","user_" + str(user.id)+"_image.npy"), 'rb') as f:
+        image = np.load(f) 
+
+    print(pose_data.shape)
+    print(pose_data)
+    # print(parse)
+    # Image.fromarray(parse).save("uploads/parsedImage.jpg")
+    plt.imshow(parse)
+    plt.show()
+    plt.imshow(image)
+
+    return jsonify({'message' : 'This is loaded'})
+
+@app.route('/uploads/<filename>',methods=['GET'])
 def hostFiles(filename):
     # filename = safe_join(app.root_path,"some_image")
     print(filename)
     return send_file(os.getcwd() + '/uploads' +'/' + filename)
 
+@app.route('/data/test/cloth/<filename>',methods=['GET'])
+def hostProductFiles(filename):
+    # filename = safe_join(app.root_path,"some_image")
+    print(filename)
+    return send_file(os.getcwd() + '/data/test/cloth/'+filename)
+
+@app.route('/uploads/cloth/<filename>',methods=['GET'])
+def hostProductFiles1(filename):
+    # filename = safe_join(app.root_path,"some_image")
+    print(filename)
+    return send_file(os.getcwd() + '/uploads/cloth/'+filename)
+
+@app.route('/output/result/<filename>',methods=['GET'])
+def hostProducttrialImage(filename):
+    # filename = safe_join(app.root_path,"some_image")
+    print(filename)
+    return send_file(os.getcwd() + '/output/result/'+filename)
 
 def getApp():
     return app
